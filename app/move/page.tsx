@@ -1,5 +1,6 @@
 "use client";
 
+import BarcodeScanner from "@/components/BarcodeScanner";
 import { supabase } from "@/lib/supabaseClient";
 import { Location, Product, Warehouse } from "@/lib/types";
 import { useEffect, useMemo, useState } from "react";
@@ -37,6 +38,7 @@ export default function MovePage() {
   useEffect(() => {
     (async () => {
       setError(null);
+
       const { data: session } = await supabase.auth.getSession();
       if (!session.session) {
         setError("Nie si prihlásený. Choď na /login.");
@@ -55,7 +57,7 @@ export default function MovePage() {
       setLocations((l.data as any) ?? []);
       setProducts((p.data as any) ?? []);
 
-      // defaults
+      // Default: pri IN nastav cieľ na Sklad / S-01 (ak existuje)
       const sklad = (w.data as any[])?.find((x) => x.name === "Sklad");
       const s01 = (l.data as any[])?.find((x) => x.code === "S-01" && x.warehouse_id === sklad?.id);
       if (s01) setToLoc(s01.id);
@@ -66,18 +68,35 @@ export default function MovePage() {
     setOk(null);
     setError(null);
 
-    // reset locs based on type
     if (type === "IN") {
       setFromLoc("");
-      // keep toLoc
-    }
-    if (type === "OUT") {
+    } else if (type === "OUT") {
       setToLoc("");
-    }
-    if (type === "TRANSFER") {
-      // keep both
+      setUnitPrice("");
+    } else {
+      setUnitPrice("");
     }
   }, [type]);
+
+  function onScanned(code: string) {
+    setOk(null);
+    setError(null);
+
+    const clean = code.trim();
+    setQuery(clean);
+
+    // Najprv skús nájsť presnú zhodu EAN
+    const found = products.find((p) => (p.barcode ?? "").trim() === clean);
+
+    if (found) {
+      setProductId(found.id);
+      setOk(`Našiel som produkt: ${found.name}`);
+      return;
+    }
+
+    // Ak nenájde, ponúkne len filtrovanie (user si vyberie)
+    setError(`Nenašiel som produkt s EAN: ${clean}. Skontroluj, či má produkt vyplnené barcode (EAN).`);
+  }
 
   async function submit() {
     setError(null);
@@ -96,37 +115,45 @@ export default function MovePage() {
     const price = unitPrice.trim() === "" ? null : Number(unitPrice);
     if (type === "IN" && (price === null || Number.isNaN(price))) return setError("Pri príjme zadaj nákupnú cenu.");
 
-    // create movement
     const whId =
-      type === "IN" ? locById.get(toLoc)?.warehouse_id :
-      type === "OUT" ? locById.get(fromLoc)?.warehouse_id :
-      locById.get(toLoc)?.warehouse_id;
+      type === "IN"
+        ? locById.get(toLoc)?.warehouse_id
+        : type === "OUT"
+        ? locById.get(fromLoc)?.warehouse_id
+        : locById.get(toLoc)?.warehouse_id;
 
-    const mv = await supabase.from("movements").insert({ type, warehouse_id: whId ?? null, note: null }).select("id").single();
+    // 1) create movement
+    const mv = await supabase
+      .from("movements")
+      .insert({ type, warehouse_id: whId ?? null, note: null })
+      .select("id")
+      .single();
+
     if (mv.error) return setError(mv.error.message);
-
     const movementId = (mv.data as any).id as string;
 
-    // movement item
+    // 2) movement item
     const item = await supabase.from("movement_items").insert({
       movement_id: movementId,
       product_id: pid,
       from_location_id: fromLoc || null,
       to_location_id: toLoc || null,
       quantity: q,
-      unit_price: price
+      unit_price: price,
     });
+
     if (item.error) return setError(item.error.message);
 
-    // apply stock update (RPC)
+    // 3) apply stock update (RPC)
     const rpc = await supabase.rpc("apply_movement", {
       p_type: type,
       p_product_id: pid,
       p_from_location: fromLoc || null,
       p_to_location: toLoc || null,
       p_qty: q,
-      p_unit_price: price
+      p_unit_price: price,
     });
+
     if (rpc.error) return setError(rpc.error.message);
 
     setOk("Uložené.");
@@ -150,7 +177,7 @@ export default function MovePage() {
       {error && <div style={{ padding: 10, background: "#fee2e2" }}>{error}</div>}
       {ok && <div style={{ padding: 10, background: "#dcfce7" }}>{ok}</div>}
 
-      <div style={{ display: "grid", gap: 10, maxWidth: 720 }}>
+      <div style={{ display: "grid", gap: 12, maxWidth: 760 }}>
         <label>
           Typ pohybu
           <select value={type} onChange={(e) => setType(e.target.value as MoveType)} style={{ width: "100%", padding: 10 }}>
@@ -160,9 +187,17 @@ export default function MovePage() {
           </select>
         </label>
 
+        <h2 style={{ marginTop: 8 }}>Skenovanie (mobil)</h2>
+        <BarcodeScanner onResult={onScanned} />
+
         <label>
           Produkt (hľadaj podľa názvu/SKU/EAN)
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="napr. magnet / SV-001 / 858..." style={{ width: "100%", padding: 10 }} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="napr. magnet / SV-001 / 858..."
+            style={{ width: "100%", padding: 10 }}
+          />
         </label>
 
         <label>
@@ -171,7 +206,7 @@ export default function MovePage() {
             <option value="">— vyber —</option>
             {filteredProducts.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} (SKU: {p.sku}) {p.barcode ? `EAN: ${p.barcode}` : ""}
+                {p.name} (SKU: {p.sku}){p.barcode ? ` • EAN: ${p.barcode}` : ""}
               </option>
             ))}
           </select>
@@ -213,7 +248,40 @@ export default function MovePage() {
 
         <label>
           Množstvo (ks)
-          <input value={qty} onChange={(e) => setQty(e.target.value)} style={{ width: "100%", padding: 10 }} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => setQty(String(Math.max(1, Number(qty || "1") - 1)))}
+              style={{ padding: "10px 12px", minWidth: 44 }}
+            >
+              −
+            </button>
+
+            <input
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              inputMode="numeric"
+              style={{ width: 140, padding: 10 }}
+            />
+
+            <button
+              type="button"
+              onClick={() => setQty(String(Number(qty || "0") + 1))}
+              style={{ padding: "10px 12px", minWidth: 44 }}
+            >
+              +
+            </button>
+
+            <button type="button" onClick={() => setQty("1")} style={{ padding: "10px 12px" }}>
+              1
+            </button>
+            <button type="button" onClick={() => setQty("5")} style={{ padding: "10px 12px" }}>
+              5
+            </button>
+            <button type="button" onClick={() => setQty("10")} style={{ padding: "10px 12px" }}>
+              10
+            </button>
+          </div>
         </label>
 
         {type === "IN" && (
@@ -223,9 +291,13 @@ export default function MovePage() {
           </label>
         )}
 
-        <button onClick={submit} style={{ padding: "10px 12px", maxWidth: 220 }}>
+        <button onClick={submit} style={{ padding: "10px 12px", maxWidth: 240 }}>
           Uložiť pohyb
         </button>
+
+        <p style={{ opacity: 0.75 }}>
+          Tip: aby skenovanie našlo produkt, vyplň pri produkte pole <b>barcode (EAN)</b> v /products.
+        </p>
       </div>
     </main>
   );
