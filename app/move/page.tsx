@@ -7,6 +7,47 @@ import { useEffect, useMemo, useState } from "react";
 
 type MoveType = "IN" | "OUT" | "TRANSFER";
 
+const LS_LAST_FROM = "sklad:lastFromLoc";
+const LS_LAST_TO = "sklad:lastToLoc";
+const LS_LAST_TYPE = "sklad:lastMoveType";
+
+function safeVibrate(ms = 50) {
+  try {
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      // @ts-ignore
+      navigator.vibrate(ms);
+    }
+  } catch {}
+}
+
+function beep(freq = 880, durationMs = 80) {
+  try {
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const ctx = new AudioCtx();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = freq;
+    o.connect(g);
+    g.connect(ctx.destination);
+
+    g.gain.setValueAtTime(0.001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
+
+    o.start();
+    o.stop(ctx.currentTime + durationMs / 1000 + 0.02);
+
+    o.onended = () => {
+      try {
+        ctx.close();
+      } catch {}
+    };
+  } catch {}
+}
+
 export default function MovePage() {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -35,6 +76,7 @@ export default function MovePage() {
       .slice(0, 50);
   }, [products, query]);
 
+  // Načítanie dát
   useEffect(() => {
     (async () => {
       setError(null);
@@ -57,26 +99,56 @@ export default function MovePage() {
       setLocations((l.data as any) ?? []);
       setProducts((p.data as any) ?? []);
 
-      // Default: pri IN nastav cieľ na Sklad / S-01 (ak existuje)
+      // Default: pri IN nastav cieľ na Sklad / S-01
       const sklad = (w.data as any[])?.find((x) => x.name === "Sklad");
       const s01 = (l.data as any[])?.find((x) => x.code === "S-01" && x.warehouse_id === sklad?.id);
       if (s01) setToLoc(s01.id);
+
+      // Restore last type/locs
+      try {
+        const lastType = (localStorage.getItem(LS_LAST_TYPE) as MoveType | null) ?? null;
+        if (lastType === "IN" || lastType === "OUT" || lastType === "TRANSFER") {
+          setType(lastType);
+        }
+
+        const lastFrom = localStorage.getItem(LS_LAST_FROM) ?? "";
+        const lastTo = localStorage.getItem(LS_LAST_TO) ?? "";
+
+        // nastav len ak existujú v locations
+        const locIds = new Set(((l.data as any[]) ?? []).map((x) => x.id));
+        if (lastFrom && locIds.has(lastFrom)) setFromLoc(lastFrom);
+        if (lastTo && locIds.has(lastTo)) setToLoc(lastTo);
+      } catch {}
     })();
   }, []);
 
+  // Pri zmene typu: automaticky predvyplň posledné lokácie
   useEffect(() => {
     setOk(null);
     setError(null);
 
-    if (type === "IN") {
-      setFromLoc("");
-    } else if (type === "OUT") {
-      setToLoc("");
-      setUnitPrice("");
-    } else {
-      setUnitPrice("");
-    }
-  }, [type]);
+    try {
+      localStorage.setItem(LS_LAST_TYPE, type);
+      const lastFrom = localStorage.getItem(LS_LAST_FROM) ?? "";
+      const lastTo = localStorage.getItem(LS_LAST_TO) ?? "";
+
+      const locIds = new Set(locations.map((x) => x.id));
+
+      if (type === "IN") {
+        setFromLoc("");
+        if (lastTo && locIds.has(lastTo)) setToLoc(lastTo);
+      } else if (type === "OUT") {
+        setToLoc("");
+        setUnitPrice("");
+        if (lastFrom && locIds.has(lastFrom)) setFromLoc(lastFrom);
+      } else {
+        // TRANSFER
+        setUnitPrice("");
+        if (lastFrom && locIds.has(lastFrom)) setFromLoc(lastFrom);
+        if (lastTo && locIds.has(lastTo)) setToLoc(lastTo);
+      }
+    } catch {}
+  }, [type, locations]);
 
   function onScanned(code: string) {
     setOk(null);
@@ -85,47 +157,54 @@ export default function MovePage() {
     const clean = code.trim();
     setQuery(clean);
 
-    // Najprv skús nájsť presnú zhodu EAN
     const found = products.find((p) => (p.barcode ?? "").trim() === clean);
 
     if (found) {
       setProductId(found.id);
       setOk(`Našiel som produkt: ${found.name}`);
+      // feedback
+      safeVibrate(60);
+      beep(880, 90);
       return;
     }
 
-    // Ak nenájde, ponúkne len filtrovanie (user si vyberie)
+    // keď nenájde, aspoň feedback “negatívny”
+    safeVibrate(120);
+    beep(220, 120);
     setError(`Nenašiel som produkt s EAN: ${clean}. Skontroluj, či má produkt vyplnené barcode (EAN).`);
   }
 
-  async function submit() {
+  async function submit(opts?: { forceQty?: number; forceType?: MoveType }) {
     setError(null);
     setOk(null);
 
+    const actualType = opts?.forceType ?? type;
+
     const pid = productId;
     if (!pid) return setError("Vyber produkt.");
-    const q = Number(qty);
+
+    const q = opts?.forceQty ?? Number(qty);
     if (!q || q <= 0) return setError("Množstvo musí byť > 0.");
 
-    if (type === "IN" && !toLoc) return setError("Vyber cieľovú lokáciu.");
-    if (type === "OUT" && !fromLoc) return setError("Vyber zdrojovú lokáciu.");
-    if (type === "TRANSFER" && (!fromLoc || !toLoc)) return setError("Vyber zdroj aj cieľ.");
-    if (type === "TRANSFER" && fromLoc === toLoc) return setError("Zdroj a cieľ nemôžu byť rovnaké.");
+    if (actualType === "IN" && !toLoc) return setError("Vyber cieľovú lokáciu.");
+    if (actualType === "OUT" && !fromLoc) return setError("Vyber zdrojovú lokáciu.");
+    if (actualType === "TRANSFER" && (!fromLoc || !toLoc)) return setError("Vyber zdroj aj cieľ.");
+    if (actualType === "TRANSFER" && fromLoc === toLoc) return setError("Zdroj a cieľ nemôžu byť rovnaké.");
 
     const price = unitPrice.trim() === "" ? null : Number(unitPrice);
-    if (type === "IN" && (price === null || Number.isNaN(price))) return setError("Pri príjme zadaj nákupnú cenu.");
+    if (actualType === "IN" && (price === null || Number.isNaN(price))) return setError("Pri príjme zadaj nákupnú cenu.");
 
     const whId =
-      type === "IN"
+      actualType === "IN"
         ? locById.get(toLoc)?.warehouse_id
-        : type === "OUT"
+        : actualType === "OUT"
         ? locById.get(fromLoc)?.warehouse_id
         : locById.get(toLoc)?.warehouse_id;
 
     // 1) create movement
     const mv = await supabase
       .from("movements")
-      .insert({ type, warehouse_id: whId ?? null, note: null })
+      .insert({ type: actualType, warehouse_id: whId ?? null, note: null })
       .select("id")
       .single();
 
@@ -146,7 +225,7 @@ export default function MovePage() {
 
     // 3) apply stock update (RPC)
     const rpc = await supabase.rpc("apply_movement", {
-      p_type: type,
+      p_type: actualType,
       p_product_id: pid,
       p_from_location: fromLoc || null,
       p_to_location: toLoc || null,
@@ -156,9 +235,32 @@ export default function MovePage() {
 
     if (rpc.error) return setError(rpc.error.message);
 
+    // 4) remember last locs
+    try {
+      if (fromLoc) localStorage.setItem(LS_LAST_FROM, fromLoc);
+      if (toLoc) localStorage.setItem(LS_LAST_TO, toLoc);
+    } catch {}
+
     setOk("Uložené.");
     setQty("1");
-    setUnitPrice("");
+    if (actualType !== "IN") setUnitPrice("");
+  }
+
+  async function quickSaleMinusOne() {
+    // quick sale = OUT -1
+    if (!productId) return setError("Najprv vyber produkt (alebo naskenuj EAN).");
+
+    // prepnúť na OUT (len UI), ale vykonáme rovno OUT
+    setType("OUT");
+
+    // musí byť fromLoc (posledná lokácia sa väčšinou predvyplní)
+    if (!fromLoc) {
+      return setError("Pre rýchly predaj vyber 'Z lokácie' (predajňu/miesto). Potom to bude nabudúce automaticky.");
+    }
+
+    await submit({ forceQty: 1, forceType: "OUT" });
+    safeVibrate(40);
+    beep(660, 60);
   }
 
   return (
@@ -212,9 +314,24 @@ export default function MovePage() {
           </select>
         </label>
 
+        {/* Quick sale */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={quickSaleMinusOne}
+            style={{ padding: "10px 12px" }}
+            title="OUT -1 jedným ťukom (použije poslednú lokáciu)"
+          >
+            Rýchly predaj (OUT −1)
+          </button>
+          <span style={{ opacity: 0.7, alignSelf: "center" }}>
+            Použije poslednú zvolenú „Z lokácie“.
+          </span>
+        </div>
+
         {type !== "IN" && (
           <label>
-            Z lokácie
+            Z lokácie (posledná sa predvyplní)
             <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} style={{ width: "100%", padding: 10 }}>
               <option value="">— vyber —</option>
               {locations.map((l) => {
@@ -231,7 +348,7 @@ export default function MovePage() {
 
         {type !== "OUT" && (
           <label>
-            Do lokácie
+            Do lokácie (posledná sa predvyplní)
             <select value={toLoc} onChange={(e) => setToLoc(e.target.value)} style={{ width: "100%", padding: 10 }}>
               <option value="">— vyber —</option>
               {locations.map((l) => {
@@ -257,18 +374,9 @@ export default function MovePage() {
               −
             </button>
 
-            <input
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              inputMode="numeric"
-              style={{ width: 140, padding: 10 }}
-            />
+            <input value={qty} onChange={(e) => setQty(e.target.value)} inputMode="numeric" style={{ width: 140, padding: 10 }} />
 
-            <button
-              type="button"
-              onClick={() => setQty(String(Number(qty || "0") + 1))}
-              style={{ padding: "10px 12px", minWidth: 44 }}
-            >
+            <button type="button" onClick={() => setQty(String(Number(qty || "0") + 1))} style={{ padding: "10px 12px", minWidth: 44 }}>
               +
             </button>
 
@@ -291,7 +399,7 @@ export default function MovePage() {
           </label>
         )}
 
-        <button onClick={submit} style={{ padding: "10px 12px", maxWidth: 240 }}>
+        <button onClick={() => submit()} style={{ padding: "10px 12px", maxWidth: 240 }}>
           Uložiť pohyb
         </button>
 
