@@ -3,11 +3,17 @@
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { useRef, useState } from "react";
 
-export default function BarcodeScanner({
-  onResult,
-}: {
-  onResult: (code: string) => void;
-}) {
+function stopVideo(video: HTMLVideoElement | null) {
+  try {
+    const stream = video?.srcObject as MediaStream | null;
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+    if (video) video.srcObject = null;
+  } catch {}
+}
+
+export default function BarcodeScanner({ onResult }: { onResult: (code: string) => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -16,27 +22,29 @@ export default function BarcodeScanner({
     setErr(null);
     setRunning(true);
 
-    try {
-      const reader = new BrowserMultiFormatReader();
-      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+    const reader = new BrowserMultiFormatReader();
 
-      // prefer back camera if label is available
-      const backCam =
-        devices.find((d) => /back|rear|environment/i.test(d.label)) ?? devices[0];
+    try {
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+      const backCam = devices.find((d) => /back|rear|environment/i.test(d.label)) ?? devices[0];
 
       if (!videoRef.current) throw new Error("Video element not ready");
 
-      const result = await reader.decodeOnceFromVideoDevice(
-        backCam?.deviceId,
-        videoRef.current
-      );
+      const result = await reader.decodeOnceFromVideoDevice(backCam?.deviceId, videoRef.current);
 
       onResult(result.getText());
-
-      reader.reset();
-      setRunning(false);
     } catch (e: any) {
       setErr(e?.message ?? String(e));
+    } finally {
+      // vždy zastav kameru
+      stopVideo(videoRef.current);
+
+      // niektoré verzie majú reset(), niektoré nie – bezpečne
+      try {
+        // @ts-ignore
+        reader.reset?.();
+      } catch {}
+
       setRunning(false);
     }
   }
@@ -51,17 +59,10 @@ export default function BarcodeScanner({
       </div>
 
       <div style={{ marginTop: 10 }}>
-        <video
-          ref={videoRef}
-          style={{ width: "100%", maxWidth: 520, borderRadius: 8 }}
-        />
+        <video ref={videoRef} style={{ width: "100%", maxWidth: 520, borderRadius: 8 }} />
       </div>
 
-      {err && (
-        <div style={{ marginTop: 10, padding: 10, background: "#fee2e2" }}>
-          {err}
-        </div>
-      )}
+      {err && <div style={{ marginTop: 10, padding: 10, background: "#fee2e2" }}>{err}</div>}
     </div>
   );
 }
