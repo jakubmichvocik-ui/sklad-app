@@ -39,11 +39,6 @@ export default function BarcodeScanner({ onResult }: { onResult: (code: string) 
       // vždy zastav kameru
       stopVideo(videoRef.current);
 
-      // niektoré verzie majú reset(), niektoré nie – bezpečne
-      try {
-        // @ts-ignore
-        reader.reset?.();
-      } catch {}
 
       setRunning(false);
     }
