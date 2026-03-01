@@ -11,11 +11,13 @@ async function assertCallerCanCloseInventory(
   const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
   if (error || !data.user) throw new Error("Unauthorized");
 
-  const { data: roleRow } = await supabaseAdmin
+  const { data: roleRow, error: roleErr } = await supabaseAdmin
     .from("user_roles")
     .select("role_key")
     .eq("user_id", data.user.id)
     .single();
+
+  if (roleErr) throw new Error("Role check failed");
 
   // jednoduché pravidlo: admin alebo manager
   if (!roleRow || !["admin", "manager"].includes(roleRow.role_key)) throw new Error("Forbidden");
@@ -42,7 +44,12 @@ export async function POST(req: Request) {
       .single();
 
     if (sErr) return NextResponse.json({ error: sErr.message }, { status: 400 });
-    if (sess.status !== "OPEN") return NextResponse.json({ error: "Session is not OPEN." }, { status: 400 });
+    if (!sess) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    if ((sess as any).status !== "OPEN") {
+      return NextResponse.json({ error: "Session is not OPEN." }, { status: 400 });
+    }
+
+    const warehouse_id = (sess as any).warehouse_id as string;
 
     // load lines
     const { data: lines, error: lErr } = await supabaseAdmin
@@ -52,11 +59,11 @@ export async function POST(req: Request) {
 
     if (lErr) return NextResponse.json({ error: lErr.message }, { status: 400 });
 
-    const warehouse_id = sess.warehouse_id as string;
+    const safeLines = (lines ?? []) as any[];
 
-    // 1) audit log (optional, but recommended)
-    if ((lines ?? []).length > 0) {
-      const adjRows = (lines ?? []).map((l: any) => ({
+    // 1) audit log (optional)
+    if (safeLines.length > 0) {
+      const adjRows = safeLines.map((l) => ({
         session_id,
         warehouse_id,
         product_id: l.product_id,
@@ -65,13 +72,14 @@ export async function POST(req: Request) {
         diff_qty: Number(l.counted_qty ?? 0) - Number(l.expected_qty ?? 0),
       }));
 
-      // ak tabuľka neexistuje, insert zlyhá – vtedy to len preskočíme
-      await supabaseAdmin.from("inventory_adjustments").insert(adjRows).catch(() => null);
+      // audit je voliteľný: ak tabuľka neexistuje alebo insert zlyhá, ignorujeme
+      const { error: adjErr } = await supabaseAdmin.from("inventory_adjustments").insert(adjRows);
+      // ignore adjErr
+      void adjErr;
     }
 
     // 2) dorovnanie skladu: stock.qty = counted_qty
-    // Predpoklad: máš tabuľku stock(warehouse_id, product_id, qty) s unique(warehouse_id, product_id)
-    const stockUpserts = (lines ?? []).map((l: any) => ({
+    const stockUpserts = safeLines.map((l) => ({
       warehouse_id,
       product_id: l.product_id,
       qty: Number(l.counted_qty ?? 0),
