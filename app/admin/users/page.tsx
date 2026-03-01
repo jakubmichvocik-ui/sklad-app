@@ -31,9 +31,20 @@ export default function AdminUsersPage() {
   }
 
   async function loadMeRole() {
-    const { data, error } = await supabase.rpc("current_role");
-    if (!error) setMeRole(data ?? "");
+  const { data: session } = await supabase.auth.getSession();
+  if (!session.session) {
+    window.location.href = "/login";
+    return;
   }
+
+  const { data, error } = await supabase.rpc("current_role");
+  const r = error ? "" : (data ?? "");
+  setMeRole(r);
+
+  if (r !== "admin") {
+    window.location.href = "/dashboard";
+  }
+}
 
   async function loadUsers() {
     setLoading(true);
@@ -62,10 +73,12 @@ export default function AdminUsersPage() {
     setLoading(false);
   }
 
-  useEffect(() => {
-    loadMeRole();
-    loadUsers();
-  }, []);
+useEffect(() => {
+  (async () => {
+    await loadMeRole();
+    await loadUsers();
+  })();
+}, []);
 
   async function createUser() {
     setErr(null);
