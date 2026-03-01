@@ -94,6 +94,23 @@ export async function POST(req: Request) {
       }
     }
 
+    async function assertCallerIsAdmin(
+  supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
+  accessToken: string
+) {
+  const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
+  if (error || !data.user) throw new Error("Unauthorized");
+
+  const { data: roleRow, error: roleErr } = await supabaseAdmin
+    .from("user_roles")
+    .select("role_key")
+    .eq("user_id", data.user.id)
+    .single();
+
+  if (roleErr) throw new Error("Role check failed");
+  if (roleRow?.role_key !== "admin") throw new Error("Forbidden");
+}
+
     return NextResponse.json({ ok: true, user_id: newUserId });
   } catch (e: any) {
     const msg = e?.message ?? "Server error";
