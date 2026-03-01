@@ -2,6 +2,7 @@
 
 import { supabase } from "@/lib/supabaseClient";
 import { useEffect, useMemo, useState } from "react";
+import TopBar from "@/components/TopBar";
 
 type StockRow = {
   quantity: number | null;
@@ -52,6 +53,7 @@ export default function DashboardPage() {
 
   return (
     <main>
+<TopBar />
       <h1>Dashboard</h1>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <a href="/">Domov</a>
