@@ -89,17 +89,23 @@ useEffect(() => {
       return;
     }
 
-    const token = await getAccessToken();
-    if (!token) return setErr("Nie si prihlásený.");
+   const token = await getAccessToken();
+if (!token) return setErr("Nie si prihlásený.");
 
-    const res = await fetch("/api/admin/create-user", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ email: email.trim(), password: password.trim(), role_key: role }),
-    });
+const res = await fetch("/api/admin/create-user", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+  body: JSON.stringify({
+    email: email.trim(),
+    password: password.trim(),
+    role_key: role,
+    warehouse_ids: warehouseIds,   // ak používaš scope
+    permissions: perms,            // ak používaš checkbox práva
+  }),
+});
 
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return setErr(json?.error ?? "Create user failed");
