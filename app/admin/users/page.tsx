@@ -24,6 +24,18 @@ export default function AdminUsersPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<RoleKey>("clerk");
+  // scope (sklady, ktoré user môže vidieť)
+  const [warehouseIds, setWarehouseIds] = useState<string[]>([]);
+
+  // individuálne práva (checkboxy)
+  const [perms, setPerms] = useState({
+    can_view_stock: true,
+    can_view_purchase_price: false,
+    can_do_in: false,
+    can_do_out: true,
+    can_do_transfer: false,
+    can_edit_products: false,
+  });
 
   async function getAccessToken() {
     const { data } = await supabase.auth.getSession();
@@ -114,6 +126,15 @@ const res = await fetch("/api/admin/create-user", {
     setEmail("");
     setPassword("");
     setRole("clerk");
+       setWarehouseIds([]);
+    setPerms({
+      can_view_stock: true,
+      can_view_purchase_price: false,
+      can_do_in: false,
+      can_do_out: true,
+      can_do_transfer: false,
+      can_edit_products: false,
+    }); 
     await loadUsers();
   }
 
