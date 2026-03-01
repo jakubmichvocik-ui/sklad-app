@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
-async function assertCallerIsAdmin(accessToken: string) {
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+async function assertCallerIsAdmin(
+  supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
+  accessToken: string
+) {
   const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
   if (error || !data.user) throw new Error("Unauthorized");
 
@@ -16,12 +22,14 @@ async function assertCallerIsAdmin(accessToken: string) {
 }
 
 export async function GET(req: Request) {
+  const supabaseAdmin = getSupabaseAdmin();
+
   try {
     const auth = req.headers.get("authorization") || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     if (!token) return NextResponse.json({ error: "Missing token" }, { status: 401 });
 
-    await assertCallerIsAdmin(token);
+    await assertCallerIsAdmin(supabaseAdmin, token);
 
     // list users (admin API)
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 200, page: 1 });
@@ -36,7 +44,7 @@ export async function GET(req: Request) {
 
     const roleMap = new Map((roles ?? []).map((r: any) => [r.user_id, r.role_key]));
 
-    const users = (data.users ?? []).map((u: any) => ({
+    const users = (data?.users ?? []).map((u: any) => ({
       id: u.id,
       email: u.email,
       created_at: u.created_at,
@@ -46,6 +54,8 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ users });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+    const msg = e?.message ?? "Server error";
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return NextResponse.json({ error: msg }, { status });
   }
 }
