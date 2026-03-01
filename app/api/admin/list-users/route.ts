@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 async function assertCallerIsAdmin(accessToken: string) {
   const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
