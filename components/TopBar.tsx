@@ -78,13 +78,21 @@ export default function TopBar() {
 
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // ✅ build-safe: načítaj user len raz, bez závislostí čo spôsobujú loop
   useEffect(() => {
     let alive = true;
 
     (async () => {
       try {
         setLoading(true);
+
+        if (!supabase) {
+          if (!alive) return;
+          setEmail("Chýba SUPABASE env");
+          setRole("viewer");
+          setPerms(DEFAULT_PERMS);
+          setLoading(false);
+          return;
+        }
 
         const { data: sess } = await supabase.auth.getSession();
         const session = sess.session;
@@ -101,7 +109,6 @@ export default function TopBar() {
 
         setEmail(session.user.email ?? "(bez emailu)");
 
-        // rola
         const { data: r, error: rErr } = await supabase.rpc("current_role");
         const rk: RoleKey = rErr ? "viewer" : ((r ?? "viewer") as RoleKey);
 
@@ -109,10 +116,11 @@ export default function TopBar() {
 
         setRole(rk);
 
-        // práva (ak tabuľka existuje), inak fallback na default role
         const { data: pRow, error: pErr } = await supabase
           .from("user_permissions")
-          .select("can_admin,can_products,can_warehouses,can_stock,can_move,can_orders,can_picker,can_inventory")
+          .select(
+            "can_admin,can_products,can_warehouses,can_stock,can_move,can_orders,can_picker,can_inventory"
+          )
           .eq("user_id", session.user.id)
           .maybeSingle();
 
@@ -140,13 +148,10 @@ export default function TopBar() {
     return [
       { key: "admin", label: "Admin", href: "/admin/users", icon: "🔐", show: perms.can_admin },
       { key: "dashboard", label: "Dashboard", href: "/dashboard", icon: "🏠", show: true },
-
       { key: "products", label: "Produkty", href: "/products", icon: "📦", show: perms.can_products },
       { key: "warehouses", label: "Sklady", href: "/warehouses", icon: "🏬", show: perms.can_warehouses },
-
       { key: "stock", label: "Prehľad skladu", href: "/stock", icon: "📊", show: perms.can_stock },
       { key: "map", label: "Mapa skladu", href: "/map", icon: "🗺️", show: perms.can_stock },
-
       { key: "move", label: "Pohyb", href: "/move", icon: "🔄", show: perms.can_move },
       { key: "orders", label: "Objednávky", href: "/orders", icon: "📋", show: perms.can_orders },
       { key: "picker", label: "Picker", href: "/picker", icon: "📦", show: perms.can_picker },
@@ -159,6 +164,7 @@ export default function TopBar() {
   }
 
   async function signOut() {
+    if (!supabase) return;
     await supabase.auth.signOut();
     window.location.href = "/login";
   }
@@ -186,7 +192,7 @@ export default function TopBar() {
         }}
       >
         <div style={{ display: "grid", gap: 2 }}>
-          <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>🧩 Sklad</div>
+          <div style={{ fontWeight: 900 }}>🧩 Sklad</div>
           <div style={{ fontSize: 12, opacity: 0.7 }}>
             {loading ? "Načítavam…" : `${email} • rola: ${role}`}
           </div>
